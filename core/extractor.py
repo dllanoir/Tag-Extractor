@@ -396,18 +396,21 @@ class PdfTagExtractor:
         levels = []
         config = self._config
         for y, words in visual_lines:
-            # Reconstruct any marker text from the left side with the correct font size
-            left_words = [
+            # A level marker must START on the far left, but can extend further right.
+            # We collect all words on this line with the correct font size up to x=500.
+            level_words = [
                 w for w in words
-                if w["x0"] < config.level_x_max
+                if w["x0"] < 500.0
                 and config.level_size_min <= w["size"] <= config.level_size_max
             ]
             
-            if left_words:
-                left_words.sort(key=lambda w: w["x0"])
-                level_text = " ".join(w["text"].strip() for w in left_words)
-                if level_text.strip():
-                    levels.append((y, level_text))
+            if level_words:
+                level_words.sort(key=lambda w: w["x0"])
+                # It is only a level marker if it actually begins on the far left
+                if level_words[0]["x0"] < config.level_x_max:
+                    level_text = " ".join(w["text"].strip() for w in level_words)
+                    if level_text.strip():
+                        levels.append((y, level_text))
 
         return levels
 
