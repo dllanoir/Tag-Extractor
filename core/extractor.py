@@ -215,6 +215,7 @@ class PdfTagExtractor:
         """
         config = self._config
         records: list[TagRecord] = []
+        current_subarea_y = 0
 
         # ── Step 1: Group words into visual lines ──────────────────────────
         visual_lines: list[tuple[int, list[dict]]] = []
@@ -277,6 +278,7 @@ class PdfTagExtractor:
                 if subarea_buffer:
                     current_subarea = " ".join(subarea_buffer)
                     subarea_buffer = []
+                    current_subarea_y = y0
 
                 # --- Tag matching ---
                 if self._tag_regex.fullmatch(text):
@@ -296,7 +298,7 @@ class PdfTagExtractor:
                     )
 
                     # --- Level mapping ---
-                    level = self._find_level_for_tag(y0, levels)
+                    level = self._find_level_for_tag(y0, levels, current_subarea_y)
 
                     records.append(
                         TagRecord(
@@ -414,12 +416,13 @@ class PdfTagExtractor:
 
         return levels
 
-    def _find_level_for_tag(self, tag_y: int, levels: list[tuple[int, str]]) -> str:
+    def _find_level_for_tag(self, tag_y: int, levels: list[tuple[int, str]], subarea_y: int) -> str:
         """Find the nearest level marker above the tag's y-position.
 
         Args:
             tag_y: The y-position (top) of the tag.
             levels: List of (y_position, level_text) tuples for the current page.
+            subarea_y: The y-position where the current subarea started.
 
         Returns:
             The level text, or empty string if no valid level was found above.
@@ -429,7 +432,8 @@ class PdfTagExtractor:
 
         for level_y, level_text in levels:
             # Level must be physically above or on the same line as the tag
-            if level_y <= tag_y:
+            # AND must belong to the current subarea (i.e. declared at or after subarea_y)
+            if subarea_y <= level_y <= tag_y:
                 if level_y > best_y:
                     best_y = level_y
                     best_level = level_text
