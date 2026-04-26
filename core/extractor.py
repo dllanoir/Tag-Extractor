@@ -384,12 +384,11 @@ class PdfTagExtractor:
                 break
 
             # Collect bold words whose center falls within the search range
-            nearby_bold: list[dict] = [
+            nearby_bold = [
                 pw for pw in prev_words
                 if self._is_bold(pw)
-                and search_x0
-                <= (pw["x0"] + pw.get("x1", pw["x0"] + 20)) / 2
-                <= search_x1
+                and search_x0 <= (pw["x0"] + pw.get("x1", pw["x0"] + 20)) / 2 <= search_x1
+                and not re.search(r'\bC[ce][ab]-|C-[A-Z0-9]+-|\.\d{3}\b', pw["text"])
             ]
 
             if nearby_bold:
@@ -457,8 +456,11 @@ class PdfTagExtractor:
             if bracket_words:
                 # Sort collected words horizontally since they are roughly on the same line
                 bracket_words.sort(key=lambda w: (w["top"], w["x0"]))
-                text = " ".join(w["text"].strip() for w in bracket_words)
-                if text.strip():
+                text = " ".join(w["text"].strip() for w in bracket_words).strip()
+                
+                # Exclude brackets that are actually cable tags or component tags sitting on a drawn line
+                # Cables usually start with Cca-, Ccb-, C-..., or end with .001, .002, etc.
+                if text and not re.search(r'\bC[ce][ab]-|C-[A-Z0-9]+-|\.\d{3}\b', text):
                     brackets.append({
                         "text": text,
                         "x0": x0,
