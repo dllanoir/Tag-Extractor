@@ -25,7 +25,9 @@ _ACCENT = "#0EA5E9"
 _ACCENT_HOVER = "#0284C7"
 _ACCENT_DARK = "#075985"
 _SUCCESS = "#22C55E"
+_SUCCESS_DARK = "#15803D"
 _ERROR = "#EF4444"
+_ERROR_DARK = "#DC2626"
 _TABLE_BG_DARK = "#1E293B"
 _TABLE_FG_DARK = "#E2E8F0"
 _TABLE_SELECTED_DARK = "#334155"
@@ -34,6 +36,9 @@ _TABLE_BG_LIGHT = "#FFFFFF"
 _TABLE_FG_LIGHT = "#1E293B"
 _TABLE_SELECTED_LIGHT = "#DBEAFE"
 _TABLE_STRIPE_LIGHT = "#F1F5F9"
+_TABLE_HEADING_BG_LIGHT = "#0284C7"
+_SECONDARY_TEXT_DARK = "#94A3B8"
+_SECONDARY_TEXT_LIGHT = "#64748B"
 _FONT_FAMILY = "Segoe UI"
 
 
@@ -101,9 +106,10 @@ class TagExtractorApp(ctk.CTk):
             header,
             text="Extração automática de tags de diagramas de engenharia",
             font=ctk.CTkFont(family=_FONT_FAMILY, size=12),
-            text_color="gray",
+            text_color=_SECONDARY_TEXT_DARK,
         )
         subtitle.grid(row=1, column=0, sticky="w", pady=(0, 0))
+        self._subtitle = subtitle
 
         self._theme_btn = ctk.CTkButton(
             header,
@@ -246,7 +252,7 @@ class TagExtractorApp(ctk.CTk):
             frame,
             text="Pronto para iniciar.",
             font=ctk.CTkFont(family=_FONT_FAMILY, size=11),
-            text_color="gray",
+            text_color=_SECONDARY_TEXT_DARK,
         )
         self._status_label.grid(row=1, column=0, sticky="w")
 
@@ -302,7 +308,7 @@ class TagExtractorApp(ctk.CTk):
             footer,
             text="Nenhum registro carregado.",
             font=ctk.CTkFont(family=_FONT_FAMILY, size=12),
-            text_color="gray",
+            text_color=_SECONDARY_TEXT_DARK,
         )
         self._count_label.grid(row=0, column=0, sticky="w")
 
@@ -327,12 +333,30 @@ class TagExtractorApp(ctk.CTk):
     def _toggle_theme(self) -> None:
         """Toggle between dark and light appearance modes."""
         self._is_dark = not self._is_dark
+        secondary = _SECONDARY_TEXT_DARK if self._is_dark else _SECONDARY_TEXT_LIGHT
+
         if self._is_dark:
             ctk.set_appearance_mode("dark")
-            self._theme_btn.configure(text="☀️ Light")
+            self._theme_btn.configure(
+                text="☀️ Light",
+                border_color="gray",
+                hover_color=_ACCENT_DARK,
+                text_color="white",
+            )
         else:
             ctk.set_appearance_mode("light")
-            self._theme_btn.configure(text="🌙 Dark")
+            self._theme_btn.configure(
+                text="🌙 Dark",
+                border_color="#CBD5E1",
+                hover_color="#E2E8F0",
+                text_color="#1E293B",
+            )
+
+        # Update secondary-text labels to match the new theme
+        self._subtitle.configure(text_color=secondary)
+        self._status_label.configure(text_color=secondary)
+        self._count_label.configure(text_color=secondary)
+
         self._apply_table_theme()
 
     def _apply_table_theme(self) -> None:
@@ -344,6 +368,7 @@ class TagExtractorApp(ctk.CTk):
                 _TABLE_SELECTED_DARK,
                 _TABLE_STRIPE_DARK,
             )
+            heading_bg = _ACCENT_DARK
         else:
             bg, fg, sel, stripe = (
                 _TABLE_BG_LIGHT,
@@ -351,6 +376,7 @@ class TagExtractorApp(ctk.CTk):
                 _TABLE_SELECTED_LIGHT,
                 _TABLE_STRIPE_LIGHT,
             )
+            heading_bg = _TABLE_HEADING_BG_LIGHT
 
         self._table_style.theme_use("default")
         self._table_style.configure(
@@ -364,7 +390,7 @@ class TagExtractorApp(ctk.CTk):
         )
         self._table_style.configure(
             "Custom.Treeview.Heading",
-            background=_ACCENT_DARK,
+            background=heading_bg,
             foreground="white",
             font=(_FONT_FAMILY, 11, "bold"),
             borderwidth=0,
@@ -422,7 +448,10 @@ class TagExtractorApp(ctk.CTk):
         self._extract_btn.configure(state="disabled", text="⏳  PROCESSANDO...")
         self._export_btn.configure(state="disabled")
         self._progress_bar.set(0)
-        self._status_label.configure(text="Iniciando extração...", text_color=_ACCENT)
+        self._status_label.configure(
+            text="Iniciando extração...",
+            text_color=_ACCENT_DARK if not self._is_dark else _ACCENT,
+        )
         self._clear_table()
 
         thread = threading.Thread(target=self._run_extraction, daemon=True)
@@ -457,7 +486,7 @@ class TagExtractorApp(ctk.CTk):
         self._progress_bar.set(value)
         self._status_label.configure(
             text=f"Processando página {current} de {total}...",
-            text_color=_ACCENT,
+            text_color=_ACCENT_DARK if not self._is_dark else _ACCENT,
         )
 
     def _on_extraction_complete(self, records: list[TagRecord]) -> None:
@@ -469,13 +498,15 @@ class TagExtractorApp(ctk.CTk):
         self._populate_table(records)
 
         count = len(records)
+        success_color = _SUCCESS_DARK if not self._is_dark else _SUCCESS
+        error_color = _ERROR_DARK if not self._is_dark else _ERROR
         self._status_label.configure(
             text=f"✅ Extração concluída — {count} tags encontradas.",
-            text_color=_SUCCESS,
+            text_color=success_color,
         )
         self._count_label.configure(
             text=f"📊 {count} registros carregados.",
-            text_color=_SUCCESS if count > 0 else _ERROR,
+            text_color=success_color if count > 0 else error_color,
         )
         self._extract_btn.configure(state="normal", text="⚙️  EXTRAIR TAGS")
         self._export_btn.configure(state="normal" if count > 0 else "disabled")
@@ -484,7 +515,8 @@ class TagExtractorApp(ctk.CTk):
     def _on_extraction_error(self, message: str) -> None:
         """Handle extraction failure (called on main thread)."""
         self._progress_bar.set(0)
-        self._status_label.configure(text=f"❌ {message}", text_color=_ERROR)
+        error_color = _ERROR_DARK if not self._is_dark else _ERROR
+        self._status_label.configure(text=f"❌ {message}", text_color=error_color)
         self._extract_btn.configure(state="normal", text="⚙️  EXTRAIR TAGS")
         messagebox.showerror("Erro na Extração", message)
 
@@ -547,7 +579,7 @@ class TagExtractorApp(ctk.CTk):
 
             self._status_label.configure(
                 text=f"💾 Exportado: {output_file.name}",
-                text_color=_SUCCESS,
+                text_color=_SUCCESS_DARK if not self._is_dark else _SUCCESS,
             )
             messagebox.showinfo(
                 "Exportação Concluída",
