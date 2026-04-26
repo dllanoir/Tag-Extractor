@@ -196,8 +196,10 @@ class PdfTagExtractor:
     ) -> tuple[list[TagRecord], str, str, list[str], list[str]]:
         """Process pre-extracted words from a single page and extract tags.
 
-        This method handles header classification and tag matching. It receives
-        already-extracted and sorted words (from the parallel phase).
+        This method handles header classification, tag matching, and location
+        extraction. It groups words into visual lines, then for each tag found,
+        looks 1-2 lines above for nearby text that represents the tag's
+        physical installation location.
 
         Args:
             words: Pre-extracted and sorted word dicts from pdfplumber.
@@ -214,71 +216,153 @@ class PdfTagExtractor:
         config = self._config
         records: list[TagRecord] = []
 
+        # ── Step 1: Group words into visual lines ──────────────────────────
+        visual_lines: list[tuple[int, list[dict]]] = []
         current_line_y = -1
-        accumulated_line_text = ""
+        current_line_words: list[dict] = []
 
         for word_data in words:
-            text = word_data["text"].strip()
-            size = word_data["size"]
-            x0 = word_data["x0"]
             y0 = round(word_data["top"])
-
-            # --- Line tracker: group words on the same visual line ---
             if y0 != current_line_y:
+                if current_line_words:
+                    visual_lines.append((current_line_y, current_line_words))
                 current_line_y = y0
-                accumulated_line_text = text
+                current_line_words = [word_data]
             else:
-                accumulated_line_text += " " + text
+                current_line_words.append(word_data)
 
-            # --- Zone and header classification ---
-            in_central_zone = config.zone_min_x <= x0 <= config.zone_max_x
+        if current_line_words:
+            visual_lines.append((current_line_y, current_line_words))
 
-            h1_min, h1_max = config.header1_size_range
-            h2_min, h2_max = config.header2_size_range
+        # ── Step 2: Process headers and tags line by line ──────────────────
+        for line_idx, (y0, line_words) in enumerate(visual_lines):
+            accumulated_line_text = " ".join(w["text"].strip() for w in line_words)
 
-            is_header_1 = (h1_min <= size <= h1_max) and in_central_zone
-            is_header_2 = (h2_min <= size <= h2_max) and in_central_zone
+            for word_data in line_words:
+                text = word_data["text"].strip()
+                size = word_data["size"]
+                x0 = word_data["x0"]
 
-            # --- Header buffer logic (identical to original algorithm) ---
-            if is_header_1:
-                if subarea_buffer:
-                    current_subarea = " ".join(subarea_buffer)
-                    subarea_buffer = []
-                area_buffer.append(text)
-                continue
+                # --- Zone and header classification ---
+                in_central_zone = config.zone_min_x <= x0 <= config.zone_max_x
 
-            if is_header_2:
+                h1_min, h1_max = config.header1_size_range
+                h2_min, h2_max = config.header2_size_range
+
+                is_header_1 = (h1_min <= size <= h1_max) and in_central_zone
+                is_header_2 = (h2_min <= size <= h2_max) and in_central_zone
+
+                # --- Header buffer logic (identical to original algorithm) ---
+                if is_header_1:
+                    if subarea_buffer:
+                        current_subarea = " ".join(subarea_buffer)
+                        subarea_buffer = []
+                    area_buffer.append(text)
+                    continue
+
+                if is_header_2:
+                    if area_buffer:
+                        current_area = " ".join(area_buffer)
+                        area_buffer = []
+                    subarea_buffer.append(text)
+                    continue
+
+                # Normal text — flush pending header buffers
                 if area_buffer:
                     current_area = " ".join(area_buffer)
                     area_buffer = []
-                subarea_buffer.append(text)
-                continue
+                if subarea_buffer:
+                    current_subarea = " ".join(subarea_buffer)
+                    subarea_buffer = []
 
-            # Normal text — flush pending header buffers
-            if area_buffer:
-                current_area = " ".join(area_buffer)
-                area_buffer = []
-            if subarea_buffer:
-                current_subarea = " ".join(subarea_buffer)
-                subarea_buffer = []
+                # --- Tag matching ---
+                if self._tag_regex.fullmatch(text):
+                    # Exclusion guard: skip tags on lines with FROM/TO
+                    if self._exclusion_pattern.search(accumulated_line_text):
+                        logger.debug(
+                            "Tag '%s' excluída (linha contém keyword de exclusão)",
+                            text,
+                        )
+                        continue
 
-            # --- Tag matching ---
-            if self._tag_regex.fullmatch(text):
-                # Exclusion guard: skip tags on lines with FROM/TO
-                if self._exclusion_pattern.search(accumulated_line_text):
-                    logger.debug(
-                        "Tag '%s' excluída (linha contém keyword de exclusão)",
-                        text,
+                    # --- Location extraction ---
+                    location = self._find_location_above(
+                        tag_word=word_data,
+                        visual_lines=visual_lines,
+                        tag_line_idx=line_idx,
                     )
-                    continue
 
-                records.append(
-                    TagRecord(
-                        page=page_number,
-                        area=current_area,
-                        subarea=current_subarea,
-                        tag=text,
+                    records.append(
+                        TagRecord(
+                            page=page_number,
+                            area=current_area,
+                            subarea=current_subarea,
+                            tag=text,
+                            location=location,
+                        )
                     )
-                )
 
         return records, current_area, current_subarea, area_buffer, subarea_buffer
+
+    def _find_location_above(
+        self,
+        tag_word: dict,
+        visual_lines: list[tuple[int, list[dict]]],
+        tag_line_idx: int,
+    ) -> str:
+        """Find the physical location text above a tag by spatial proximity.
+
+        Looks at words on 1-2 visual lines directly above the tag that share
+        a similar x-coordinate. In engineering one-line diagrams, the location
+        label (e.g., '4-MEN CABIN (A621)') is typically placed 1-2 lines
+        above the tag identifier.
+
+        Args:
+            tag_word: The word dict for the matched tag.
+            visual_lines: All visual lines on the page as (y, words) tuples.
+            tag_line_idx: Index of the tag's line in visual_lines.
+
+        Returns:
+            Location string, or empty string if no location was found.
+        """
+        config = self._config
+        tag_x = tag_word["x0"]
+        tag_x_end = tag_word.get("x1", tag_x + 60)
+        tag_y = visual_lines[tag_line_idx][0]
+        tag_center_x = (tag_x + tag_x_end) / 2
+
+        location_parts: list[tuple[int, str]] = []  # (lines_above, text)
+
+        for look_back in range(1, config.location_max_lines_above + 1):
+            prev_idx = tag_line_idx - look_back
+            if prev_idx < 0:
+                break
+
+            prev_y, prev_words = visual_lines[prev_idx]
+            y_distance = tag_y - prev_y
+
+            if y_distance > config.location_y_max_distance or y_distance < 0:
+                break
+
+            # Find words on this previous line near the TAG's x position
+            nearby_words = []
+            for pw in prev_words:
+                pw_center_x = (pw["x0"] + pw.get("x1", pw["x0"] + 20)) / 2
+                x_diff_start = abs(pw["x0"] - tag_x)
+                x_diff_center = abs(pw_center_x - tag_center_x)
+
+                if (x_diff_start <= config.location_x_tolerance
+                        or x_diff_center <= config.location_x_tolerance):
+                    nearby_words.append(pw)
+
+            if nearby_words:
+                nearby_words.sort(key=lambda w: w["x0"])
+                line_text = " ".join(w["text"].strip() for w in nearby_words)
+                location_parts.append((look_back, line_text))
+
+        if not location_parts:
+            return ""
+
+        # Build location string: lines further above come first
+        location_parts.sort(key=lambda p: p[0], reverse=True)
+        return " ".join(part[1] for part in location_parts)

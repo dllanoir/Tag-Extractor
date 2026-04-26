@@ -19,6 +19,7 @@ _COLUMNS = {
     "area": "ÁREA",
     "subarea": "SUBÁREA",
     "tag": "TAG",
+    "location": "LOCAL",
 }
 
 
@@ -52,6 +53,7 @@ class DataExporter:
                 _COLUMNS["area"]: r.area,
                 _COLUMNS["subarea"]: r.subarea,
                 _COLUMNS["tag"]: r.tag,
+                _COLUMNS["location"]: r.location,
             }
             for r in records
         ]

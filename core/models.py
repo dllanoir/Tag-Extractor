@@ -16,12 +16,15 @@ class TagRecord:
         area: Primary area (e.g., 'TOPSIDE', 'ACCOMODATION') based on font size ~14pt.
         subarea: Sub-area (e.g., 'M-06 - GAS DEHYDRATATION...', 'F-DECK') ~12pt.
         tag: The engineering tag identifier (e.g., 'COR-M06-5518406A').
+        location: Physical location/room where the tag is installed
+            (e.g., '4-MEN CABIN (A621)'). Empty string if not found.
     """
 
     page: int
     area: str
     subarea: str
     tag: str
+    location: str = ""
 
 
 @dataclass
@@ -40,6 +43,12 @@ class ExtractionConfig:
         header2_size_range: Font size range (min, max) for secondary headers.
         exclusion_keywords: Words that, when found on the same line as a tag,
             cause the tag to be excluded (e.g., cross-reference labels).
+        location_x_tolerance: Max horizontal distance (pts) between a tag and
+            a word above it to consider that word part of the tag's location.
+        location_y_max_distance: Max vertical distance (pts) to look above
+            a tag for location text.
+        location_max_lines_above: Max number of visual lines above a tag to
+            search for location text.
     """
 
     tag_pattern: str = r"[A-Z]{2,3}-(?:[A-Z0-9]+-)?\d{7}[A-Z]?"
@@ -50,3 +59,6 @@ class ExtractionConfig:
     exclusion_keywords: list[str] = field(
         default_factory=lambda: ["FROM", "TO"]
     )
+    location_x_tolerance: float = 35.0
+    location_y_max_distance: float = 25.0
+    location_max_lines_above: int = 2
