@@ -67,6 +67,6 @@ class ExtractionConfig:
     )
     location_x_tolerance: float = 15.0
     location_y_max_distance: float = 35.0
-    level_x_max: float = 300.0
+    level_x_max: float = 200.0
     level_size_min: float = 9.0
     level_size_max: float = 10.5
