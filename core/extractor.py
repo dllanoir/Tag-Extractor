@@ -23,8 +23,8 @@ ProgressCallback = Callable[[int, int], None]
 
 def _extract_words_from_page(
     pdf_path: str, page_index: int
-) -> tuple[int, list[dict]]:
-    """Extract words from a single PDF page (thread-safe).
+) -> tuple[int, list[dict], list[dict]]:
+    """Extract words and horizontal lines from a single PDF page (thread-safe).
 
     Each thread opens its own PDF handle to avoid shared-state issues
     with pdfplumber/pdfminer internals.
@@ -34,14 +34,18 @@ def _extract_words_from_page(
         page_index: 0-indexed page number.
 
     Returns:
-        Tuple of (page_index, sorted_words_list).
+        Tuple of (page_index, sorted_words_list, horizontal_lines_list).
     """
     with pdfplumber.open(pdf_path) as pdf:
         page = pdf.pages[page_index]
         raw_words = page.extract_words(extra_attrs=["size", "fontname"])
+        horiz_lines = [
+            line for line in page.lines
+            if line.get("width", 0) > 50 and line.get("height", 0) < 5
+        ]
     # Sort by visual line (top) then horizontal position (x0)
     sorted_words = sorted(raw_words, key=lambda w: (round(w["top"]), w["x0"]))
-    return page_index, sorted_words
+    return page_index, sorted_words, horiz_lines
 
 
 class PdfTagExtractor:
@@ -118,8 +122,9 @@ class PdfTagExtractor:
 
         # ── Phase 1: Parallel word extraction ──────────────────────────────
         max_workers = min(4, total_pages)
-        logger.info("Fase 1: Extraindo palavras em paralelo (%d processos)...", max_workers)
+        logger.info("Fase 1: Extraindo dados em paralelo (%d processos)...", max_workers)
         all_page_words: list[list[dict]] = [[] for _ in range(total_pages)]
+        all_page_lines: list[list[dict]] = [[] for _ in range(total_pages)]
         completed_count = 0
 
         try:
@@ -132,17 +137,19 @@ class PdfTagExtractor:
                 }
 
                 for future in as_completed(futures):
-                    page_idx, words = future.result()
+                    page_idx, words, lines = future.result()
                     all_page_words[page_idx] = words
+                    all_page_lines[page_idx] = lines
                     completed_count += 1
 
                     if progress_callback:
                         progress_callback(completed_count, total_pages)
 
                     logger.debug(
-                        "Página %d: %d palavras extraídas",
+                        "Página %d: %d palavras e %d linhas extraídas",
                         page_idx + 1,
                         len(words),
+                        len(lines),
                     )
 
         except Exception as exc:
@@ -163,6 +170,7 @@ class PdfTagExtractor:
             page_records, current_area, current_subarea, area_buffer, subarea_buffer = (
                 self._process_page_words(
                     words=all_page_words[page_idx],
+                    lines=all_page_lines[page_idx],
                     page_number=page_number,
                     current_area=current_area,
                     current_subarea=current_subarea,
@@ -188,6 +196,7 @@ class PdfTagExtractor:
     def _process_page_words(
         self,
         words: list[dict],
+        lines: list[dict],
         page_number: int,
         current_area: str,
         current_subarea: str,
@@ -235,8 +244,9 @@ class PdfTagExtractor:
         if current_line_words:
             visual_lines.append((current_line_y, current_line_words))
 
-        # ── Step 1.5: Pre-calculate levels for this page ───────────────────
+        # ── Step 1.5: Pre-calculate levels and brackets for this page ──────────
         levels = self._extract_levels_from_page(visual_lines)
+        brackets = self._extract_location_brackets(visual_lines, lines)
 
         # ── Step 2: Process headers and tags line by line ──────────────────
         for line_idx, (y0, line_words) in enumerate(visual_lines):
@@ -295,6 +305,7 @@ class PdfTagExtractor:
                         tag_word=word_data,
                         visual_lines=visual_lines,
                         tag_line_idx=line_idx,
+                        brackets=brackets,
                     )
 
                     # --- Level mapping ---
@@ -331,28 +342,34 @@ class PdfTagExtractor:
         tag_word: dict,
         visual_lines: list[tuple[int, list[dict]]],
         tag_line_idx: int,
+        brackets: list[dict],
     ) -> str:
-        """Find the physical location text above a tag by spatial proximity.
+        """Find the physical location text above a tag.
 
-        Iterates upward through all visual lines within ``location_y_max_distance``
-        and collects **bold** words whose horizontal center falls within the
-        tag's x-range (plus padding).  This handles multi-line location labels
-        (e.g., 'TELECOM CONTROL' on one line, 'ROOM (A707)' on the next) even
-        when unrelated visual lines exist in between.
-
-        Args:
-            tag_word: The word dict for the matched tag.
-            visual_lines: All visual lines on the page as (y, words) tuples.
-            tag_line_idx: Index of the tag's line in visual_lines.
-
-        Returns:
-            Location string, or empty string if no location was found.
+        Prioritizes Location Brackets (horizontal lines). If the tag is bounded
+        by a bracket above it (within 150 pts), returns the bracket text.
+        Otherwise, falls back to searching for bold text directly above the tag.
         """
-        config = self._config
         tag_x0 = tag_word["x0"]
         tag_x1 = tag_word.get("x1", tag_x0 + 60)
+        tag_mid = (tag_x0 + tag_x1) / 2
         tag_y = visual_lines[tag_line_idx][0]
 
+        # 1. Bracket Priority
+        valid_brackets = []
+        for bracket in brackets:
+            if bracket["x0"] <= tag_mid <= bracket["x1"]:
+                dist = tag_y - bracket["y"]
+                if 0 <= dist <= 150:
+                    valid_brackets.append((dist, bracket["text"]))
+        
+        if valid_brackets:
+            # Sort by distance (nearest first) and return its text
+            valid_brackets.sort(key=lambda x: x[0])
+            return valid_brackets[0][1]
+
+        # 2. Fallback to direct bold text above
+        config = self._config
         # Search range: tag's full horizontal span + padding on each side
         search_x0 = tag_x0 - config.location_x_tolerance
         search_x1 = tag_x1 + config.location_x_tolerance
@@ -415,6 +432,40 @@ class PdfTagExtractor:
                         levels.append((y, level_text))
 
         return levels
+
+    def _extract_location_brackets(
+        self, visual_lines: list[tuple[int, list[dict]]], horiz_lines: list[dict]
+    ) -> list[dict]:
+        """Map centered text above horizontal lines to create Location Brackets."""
+        brackets = []
+        for line in horiz_lines:
+            # Sometimes lines are represented with top/bottom reversed or exactly equal
+            line_y = min(line.get("top", 0), line.get("bottom", 0))
+            x0 = line.get("x0", 0)
+            x1 = line.get("x1", 0)
+
+            bracket_words = []
+            for y, words in visual_lines:
+                # Text must be physically above the line, but very close (e.g., within 20 points)
+                if y <= line_y and (line_y - y) <= 20:
+                    for w in words:
+                        # Check horizontal intersection (text must be within line bounds)
+                        w_mid = (w["x0"] + w.get("x1", w["x0"] + 20)) / 2
+                        if x0 <= w_mid <= x1:
+                            bracket_words.append(w)
+            
+            if bracket_words:
+                # Sort collected words horizontally since they are roughly on the same line
+                bracket_words.sort(key=lambda w: (w["top"], w["x0"]))
+                text = " ".join(w["text"].strip() for w in bracket_words)
+                if text.strip():
+                    brackets.append({
+                        "text": text,
+                        "x0": x0,
+                        "x1": x1,
+                        "y": line_y
+                    })
+        return brackets
 
     def _find_level_for_tag(self, tag_y: int, levels: list[tuple[int, str]], subarea_y: int) -> str:
         """Find the nearest level marker above the tag's y-position.
