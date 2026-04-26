@@ -388,7 +388,7 @@ class PdfTagExtractor:
     def _extract_levels_from_page(
         self, visual_lines: list[tuple[int, list[dict]]]
     ) -> list[tuple[int, str]]:
-        """Find all level markers on the page's far-left side.
+        """Find all level/deck markers on the page's far-left side.
 
         Returns:
             A list of tuples (y_position, level_text), sorted by y_position.
@@ -396,28 +396,18 @@ class PdfTagExtractor:
         levels = []
         config = self._config
         for y, words in visual_lines:
-            # Check if line contains 'LEVEL' with the right size on the left
-            has_level = False
-            for w in words:
-                text = w["text"].strip().upper()
-                if (
-                    text == "LEVEL"
-                    and config.level_size_min <= w["size"] <= config.level_size_max
-                    and w["x0"] < config.level_x_max
-                ):
-                    has_level = True
-                    break
-
-            if has_level:
-                # Reconstruct the entire level marker from the left side
-                left_words = [
-                    w for w in words
-                    if w["x0"] < config.level_x_max
-                    and config.level_size_min <= w["size"] <= config.level_size_max
-                ]
+            # Reconstruct any marker text from the left side with the correct font size
+            left_words = [
+                w for w in words
+                if w["x0"] < config.level_x_max
+                and config.level_size_min <= w["size"] <= config.level_size_max
+            ]
+            
+            if left_words:
                 left_words.sort(key=lambda w: w["x0"])
                 level_text = " ".join(w["text"].strip() for w in left_words)
-                levels.append((y, level_text))
+                if level_text.strip():
+                    levels.append((y, level_text))
 
         return levels
 
