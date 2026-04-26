@@ -38,7 +38,7 @@ def _extract_words_from_page(
     """
     with pdfplumber.open(pdf_path) as pdf:
         page = pdf.pages[page_index]
-        raw_words = page.extract_words(extra_attrs=["size"])
+        raw_words = page.extract_words(extra_attrs=["size", "fontname"])
     # Sort by visual line (top) then horizontal position (x0)
     sorted_words = sorted(raw_words, key=lambda w: (round(w["top"]), w["x0"]))
     return page_index, sorted_words
@@ -304,6 +304,19 @@ class PdfTagExtractor:
 
         return records, current_area, current_subarea, area_buffer, subarea_buffer
 
+    @staticmethod
+    def _is_bold(word: dict) -> bool:
+        """Check if a PDF word is rendered in a bold font.
+
+        Args:
+            word: A pdfplumber word dict with 'fontname' attribute.
+
+        Returns:
+            True if the font name contains 'Bold'.
+        """
+        fontname = word.get("fontname", "")
+        return "Bold" in fontname or "bold" in fontname
+
     def _find_location_above(
         self,
         tag_word: dict,
@@ -312,10 +325,11 @@ class PdfTagExtractor:
     ) -> str:
         """Find the physical location text above a tag by spatial proximity.
 
-        Looks at words on 1-2 visual lines directly above the tag that share
-        a similar x-coordinate. In engineering one-line diagrams, the location
-        label (e.g., '4-MEN CABIN (A621)') is typically placed 1-2 lines
-        above the tag identifier.
+        Iterates upward through all visual lines within ``location_y_max_distance``
+        and collects **bold** words whose horizontal center falls within the
+        tag's x-range (plus padding).  This handles multi-line location labels
+        (e.g., 'TELECOM CONTROL' on one line, 'ROOM (A707)' on the next) even
+        when unrelated visual lines exist in between.
 
         Args:
             tag_word: The word dict for the matched tag.
@@ -326,43 +340,40 @@ class PdfTagExtractor:
             Location string, or empty string if no location was found.
         """
         config = self._config
-        tag_x = tag_word["x0"]
-        tag_x_end = tag_word.get("x1", tag_x + 60)
+        tag_x0 = tag_word["x0"]
+        tag_x1 = tag_word.get("x1", tag_x0 + 60)
         tag_y = visual_lines[tag_line_idx][0]
-        tag_center_x = (tag_x + tag_x_end) / 2
 
-        location_parts: list[tuple[int, str]] = []  # (lines_above, text)
+        # Search range: tag's full horizontal span + padding on each side
+        search_x0 = tag_x0 - config.location_x_tolerance
+        search_x1 = tag_x1 + config.location_x_tolerance
 
-        for look_back in range(1, config.location_max_lines_above + 1):
-            prev_idx = tag_line_idx - look_back
-            if prev_idx < 0:
-                break
+        location_parts: list[tuple[float, str]] = []  # (y_distance, text)
 
+        for prev_idx in range(tag_line_idx - 1, -1, -1):
             prev_y, prev_words = visual_lines[prev_idx]
             y_distance = tag_y - prev_y
 
             if y_distance > config.location_y_max_distance or y_distance < 0:
                 break
 
-            # Find words on this previous line near the TAG's x position
-            nearby_words = []
-            for pw in prev_words:
-                pw_center_x = (pw["x0"] + pw.get("x1", pw["x0"] + 20)) / 2
-                x_diff_start = abs(pw["x0"] - tag_x)
-                x_diff_center = abs(pw_center_x - tag_center_x)
+            # Collect bold words whose center falls within the search range
+            nearby_bold: list[dict] = [
+                pw for pw in prev_words
+                if self._is_bold(pw)
+                and search_x0
+                <= (pw["x0"] + pw.get("x1", pw["x0"] + 20)) / 2
+                <= search_x1
+            ]
 
-                if (x_diff_start <= config.location_x_tolerance
-                        or x_diff_center <= config.location_x_tolerance):
-                    nearby_words.append(pw)
-
-            if nearby_words:
-                nearby_words.sort(key=lambda w: w["x0"])
-                line_text = " ".join(w["text"].strip() for w in nearby_words)
-                location_parts.append((look_back, line_text))
+            if nearby_bold:
+                nearby_bold.sort(key=lambda w: w["x0"])
+                line_text = " ".join(w["text"].strip() for w in nearby_bold)
+                location_parts.append((y_distance, line_text))
 
         if not location_parts:
             return ""
 
-        # Build location string: lines further above come first
+        # Build location string: lines further above (larger y_distance) first
         location_parts.sort(key=lambda p: p[0], reverse=True)
         return " ".join(part[1] for part in location_parts)
