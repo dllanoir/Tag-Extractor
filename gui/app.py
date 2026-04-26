@@ -267,7 +267,7 @@ class TagExtractorApp(ctk.CTk):
         self._table_style = ttk.Style()
         self._apply_table_theme()
 
-        columns = ("page", "area", "subarea", "tag", "location")
+        columns = ("page", "area", "subarea", "level", "tag", "location")
         self._tree = ttk.Treeview(
             table_frame,
             columns=columns,
@@ -280,12 +280,14 @@ class TagExtractorApp(ctk.CTk):
         self._tree.heading("page", text="Página", anchor="center")
         self._tree.heading("area", text="Área", anchor="w")
         self._tree.heading("subarea", text="Subárea", anchor="w")
+        self._tree.heading("level", text="Nível", anchor="w")
         self._tree.heading("tag", text="Tag", anchor="w")
         self._tree.heading("location", text="Local", anchor="w")
 
         self._tree.column("page", width=60, minwidth=50, anchor="center")
         self._tree.column("area", width=130, minwidth=80, anchor="w")
         self._tree.column("subarea", width=300, minwidth=150, anchor="w")
+        self._tree.column("level", width=150, minwidth=100, anchor="w")
         self._tree.column("tag", width=180, minwidth=120, anchor="w")
         self._tree.column("location", width=220, minwidth=120, anchor="w")
 
@@ -549,7 +551,7 @@ class TagExtractorApp(ctk.CTk):
             self._tree.insert(
                 "",
                 "end",
-                values=(record.page, record.area, record.subarea, record.tag, record.location),
+                values=(record.page, record.area, record.subarea, record.level, record.tag, record.location),
                 tags=(tag,),
             )
 

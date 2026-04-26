@@ -18,6 +18,8 @@ class TagRecord:
         tag: The engineering tag identifier (e.g., 'COR-M06-5518406A').
         location: Physical location/room where the tag is installed
             (e.g., '4-MEN CABIN (A621)'). Empty string if not found.
+        level: Deck or level extracted from the far left of the page
+            (e.g., '6TH LEVEL (EL.+68735)'). Empty string if not found.
     """
 
     page: int
@@ -25,6 +27,7 @@ class TagRecord:
     subarea: str
     tag: str
     location: str = ""
+    level: str = ""
 
 
 @dataclass
@@ -48,6 +51,10 @@ class ExtractionConfig:
         location_y_max_distance: Max vertical distance (pts) to look above
             a tag for bold location text. Larger values capture multi-line
             locations (e.g., 'TELECOM CONTROL' + 'ROOM (A707)').
+        level_x_max: Max right boundary (x1) for text to be considered a
+            level marker on the far-left side.
+        level_size_min: Minimum font size for level markers.
+        level_size_max: Maximum font size for level markers.
     """
 
     tag_pattern: str = r"[A-Z]{2,3}-(?:[A-Z0-9]+-)?\d{7}[A-Z]?"
@@ -60,4 +67,6 @@ class ExtractionConfig:
     )
     location_x_tolerance: float = 15.0
     location_y_max_distance: float = 35.0
-
+    level_x_max: float = 200.0
+    level_size_min: float = 9.0
+    level_size_max: float = 10.5

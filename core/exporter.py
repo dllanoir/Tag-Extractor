@@ -18,6 +18,7 @@ _COLUMNS = {
     "page": "PÁGINA",
     "area": "ÁREA",
     "subarea": "SUBÁREA",
+    "level": "NÍVEL",
     "tag": "TAG",
     "location": "LOCAL",
 }
@@ -52,6 +53,7 @@ class DataExporter:
                 _COLUMNS["page"]: r.page,
                 _COLUMNS["area"]: r.area,
                 _COLUMNS["subarea"]: r.subarea,
+                _COLUMNS["level"]: r.level,
                 _COLUMNS["tag"]: r.tag,
                 _COLUMNS["location"]: r.location,
             }

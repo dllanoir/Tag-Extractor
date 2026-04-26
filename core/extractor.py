@@ -234,6 +234,9 @@ class PdfTagExtractor:
         if current_line_words:
             visual_lines.append((current_line_y, current_line_words))
 
+        # ── Step 1.5: Pre-calculate levels for this page ───────────────────
+        levels = self._extract_levels_from_page(visual_lines)
+
         # ── Step 2: Process headers and tags line by line ──────────────────
         for line_idx, (y0, line_words) in enumerate(visual_lines):
             accumulated_line_text = " ".join(w["text"].strip() for w in line_words)
@@ -292,6 +295,9 @@ class PdfTagExtractor:
                         tag_line_idx=line_idx,
                     )
 
+                    # --- Level mapping ---
+                    level = self._find_level_for_tag(y0, levels)
+
                     records.append(
                         TagRecord(
                             page=page_number,
@@ -299,6 +305,7 @@ class PdfTagExtractor:
                             subarea=current_subarea,
                             tag=text,
                             location=location,
+                            level=level,
                         )
                     )
 
@@ -377,3 +384,61 @@ class PdfTagExtractor:
         # Build location string: lines further above (larger y_distance) first
         location_parts.sort(key=lambda p: p[0], reverse=True)
         return " ".join(part[1] for part in location_parts)
+
+    def _extract_levels_from_page(
+        self, visual_lines: list[tuple[int, list[dict]]]
+    ) -> list[tuple[int, str]]:
+        """Find all level markers on the page's far-left side.
+
+        Returns:
+            A list of tuples (y_position, level_text), sorted by y_position.
+        """
+        levels = []
+        config = self._config
+        for y, words in visual_lines:
+            # Check if line contains 'LEVEL' with the right size on the left
+            has_level = False
+            for w in words:
+                text = w["text"].strip().upper()
+                if (
+                    text == "LEVEL"
+                    and config.level_size_min <= w["size"] <= config.level_size_max
+                    and w["x0"] < config.level_x_max
+                ):
+                    has_level = True
+                    break
+
+            if has_level:
+                # Reconstruct the entire level marker from the left side
+                left_words = [
+                    w for w in words
+                    if w["x0"] < config.level_x_max
+                    and config.level_size_min <= w["size"] <= config.level_size_max
+                ]
+                left_words.sort(key=lambda w: w["x0"])
+                level_text = " ".join(w["text"].strip() for w in left_words)
+                levels.append((y, level_text))
+
+        return levels
+
+    def _find_level_for_tag(self, tag_y: int, levels: list[tuple[int, str]]) -> str:
+        """Find the nearest level marker above the tag's y-position.
+
+        Args:
+            tag_y: The y-position (top) of the tag.
+            levels: List of (y_position, level_text) tuples for the current page.
+
+        Returns:
+            The level text, or empty string if no valid level was found above.
+        """
+        best_level = ""
+        best_y = -1
+
+        for level_y, level_text in levels:
+            # Level must be physically above or on the same line as the tag
+            if level_y <= tag_y:
+                if level_y > best_y:
+                    best_y = level_y
+                    best_level = level_text
+
+        return best_level
